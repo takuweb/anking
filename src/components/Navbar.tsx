@@ -8,10 +8,15 @@ import {
   Moon,
   Sun,
   Plus,
-  QrCode,
   Smartphone,
   Lock,
+  User,
+  Cloud,
+  CheckCircle2,
+  RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
+import { CloudUser, SyncState } from '../utils/cloudAuth';
 
 interface NavbarProps {
   currentTab: 'dashboard' | 'cards' | 'study' | 'stats';
@@ -22,6 +27,9 @@ interface NavbarProps {
   onOpenCreateModal: () => void;
   onOpenSyncModal: () => void;
   onLockApp: () => void;
+  currentUser: CloudUser | null;
+  syncState: SyncState;
+  onOpenAccountModal: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -33,6 +41,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenCreateModal,
   onOpenSyncModal,
   onLockApp,
+  currentUser,
+  syncState,
+  onOpenAccountModal,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80">
@@ -113,15 +124,35 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right Side Actions */}
         <div className="flex items-center gap-2">
-          {/* Device Sync Button */}
-          <button
-            onClick={onOpenSyncModal}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition"
-            title="スマホとPCのデータ引き継ぎ (QR/コード)"
-          >
-            <Smartphone className="w-3.5 h-3.5 text-brand-500" />
-            <span className="hidden sm:inline">スマホ同期</span>
-          </button>
+          {/* User Account / Cloud Sync Button */}
+          {currentUser ? (
+            <button
+              onClick={onOpenAccountModal}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-50 hover:bg-brand-100 dark:bg-brand-950/40 dark:hover:bg-brand-900/60 border border-brand-200 dark:border-brand-800 text-brand-700 dark:text-brand-300 text-xs font-bold transition group"
+              title="アカウント設定 & クラウド同期"
+            >
+              <div className="w-5 h-5 rounded-full bg-brand-600 text-white flex items-center justify-center text-[10px] font-black">
+                {currentUser.username.charAt(0).toUpperCase()}
+              </div>
+              <span className="max-w-[80px] sm:max-w-[120px] truncate">{currentUser.username}</span>
+              {syncState === 'syncing' ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-brand-500" />
+              ) : syncState === 'error' ? (
+                <AlertCircle className="w-3.5 h-3.5 text-rose-500" />
+              ) : (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+              )}
+            </button>
+          ) : (
+            <button
+              onClick={onOpenAccountModal}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition"
+              title="アカウントにログイン / 新規登録（複数端末で自動同期）"
+            >
+              <User className="w-3.5 h-3.5 text-brand-500" />
+              <span className="hidden sm:inline">ログイン</span>
+            </button>
+          )}
 
           {/* Quick Create Card Button */}
           <button
@@ -189,12 +220,12 @@ export const Navbar: React.FC<NavbarProps> = ({
         </button>
 
         <button
-          onClick={onOpenSyncModal}
+          onClick={onOpenAccountModal}
           className="flex flex-col items-center gap-1 py-1 px-2 rounded-xl text-[10px] font-medium text-slate-500 dark:text-slate-400"
-          title="端末間同期"
+          title="アカウント同期"
         >
-          <Smartphone className="w-4 h-4 text-brand-500" />
-          <span>同期</span>
+          <Cloud className={`w-4 h-4 ${currentUser ? 'text-brand-500' : ''}`} />
+          <span>{currentUser ? currentUser.username : 'ログイン'}</span>
         </button>
 
         <button

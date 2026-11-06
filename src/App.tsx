@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Card, DeckStats } from './types';
 import {
   loadCards,
@@ -10,6 +10,13 @@ import {
 } from './utils/storage';
 import { getTodayDateString } from './utils/sm2';
 import { mergeCards, decompressCards, pullDataFromSyncServer } from './utils/sync';
+import {
+  CloudUser,
+  SyncState,
+  getSavedCloudUser,
+  fetchCardsFromCloud,
+  saveCardsToCloud,
+} from './utils/cloudAuth';
 import { Navbar } from './components/Navbar';
 import { Dashboard } from './components/Dashboard';
 import { CardList } from './components/CardList';
@@ -17,6 +24,7 @@ import { StudySession } from './components/StudySession';
 import { StatsView } from './components/StatsView';
 import { CardEditorModal } from './components/CardEditorModal';
 import { DeviceSyncModal } from './components/DeviceSyncModal';
+import { UserAccountModal } from './components/UserAccountModal';
 import { logout } from './components/AuthGate';
 
 export const App: React.FC = () => {
@@ -24,7 +32,13 @@ export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<'dashboard' | 'cards' | 'study' | 'stats'>('dashboard');
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<Card | null>(null);
+
+  // クラウド認証 & 同期ステート
+  const [currentUser, setCurrentUser] = useState<CloudUser | null>(() => getSavedCloudUser());
+  const [syncState, setSyncState] = useState<SyncState>('idle' as any);
+  const syncTimeoutRef = useRef<any>(null);
 
   // 学習セッション設定
   const [studyFilter, setStudyFilter] = useState<'due' | 'new' | 'all' | 'tag'>('due');
@@ -47,7 +61,33 @@ export const App: React.FC = () => {
     localStorage.setItem('remindflow_dark_mode', String(darkMode));
   }, [darkMode]);
 
-  // URLパラメーターからの自動引き継ぎ検知
+  // アプリ起動時: ログイン中ならクラウドから最新データを自動同期
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const syncInitialData = async () => {
+      setSyncState('syncing');
+      try {
+        const cloudCards = await fetchCardsFromCloud();
+        if (cloudCards && Array.isArray(cloudCards)) {
+          // ローカルのデータとクラウドのデータをマージ
+          setCards((prevCards) => {
+            const merged = mergeCards(prevCards, cloudCards);
+            saveCards(merged);
+            return merged;
+          });
+        }
+        setSyncState('synced');
+      } catch (err) {
+        console.warn('Initial cloud sync notice:', err);
+        setSyncState('error');
+      }
+    };
+
+    syncInitialData();
+  }, [currentUser]);
+
+  // URLパラメーターからの自動引き継ぎ検知 (従来のQRコード用)
   useEffect(() => {
     const checkUrlParams = async () => {
       try {
@@ -59,7 +99,6 @@ export const App: React.FC = () => {
             const pulled = await pullDataFromSyncServer(syncCode);
             handleImportSyncedCards(pulled, true);
             alert(`${pulled.length} 件のカードを取り込みました！`);
-            // URLパラメータをクリア
             window.history.replaceState({}, document.title, window.location.pathname);
           }
           return;
@@ -85,19 +124,79 @@ export const App: React.FC = () => {
     checkUrlParams();
   }, []);
 
-  // カード変更時の永続化
-  const handleUpdateCards = (newCards: Card[]) => {
+  // カード更新 & クラウド自動同期
+  const handleUpdateCards = (newCards: Card[], syncToCloud = true) => {
     setCards(newCards);
     saveCards(newCards);
+
+    // ログイン中の場合、バックグラウンドでクラウドへ同期
+    if (currentUser && syncToCloud) {
+      setSyncState('syncing');
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+
+      syncTimeoutRef.current = setTimeout(async () => {
+        try {
+          await saveCardsToCloud(newCards);
+          setSyncState('synced');
+        } catch (err) {
+          console.error('Cloud auto-save error:', err);
+          setSyncState('error');
+        }
+      }, 500); // 0.5秒デバウンス
+    }
+  };
+
+  // 手動でクラウドと即時同期
+  const handleManualSync = async () => {
+    if (!currentUser) return;
+    setSyncState('syncing');
+    try {
+      // 1. クラウドから最新データを取得
+      const cloudCards = await fetchCardsFromCloud();
+      let merged = cards;
+      if (cloudCards && Array.isArray(cloudCards)) {
+        merged = mergeCards(cards, cloudCards);
+      }
+      // 2. マージした最新結果をクラウドへ保存
+      const finalCards = await saveCardsToCloud(merged);
+      setCards(finalCards);
+      saveCards(finalCards);
+      setSyncState('synced');
+    } catch (err: any) {
+      setSyncState('error');
+      throw err;
+    }
+  };
+
+  // ログイン成功時の処理
+  const handleLoginSuccess = (user: CloudUser, cloudCards: Card[] | null) => {
+    setCurrentUser(user);
+    if (cloudCards && Array.isArray(cloudCards) && cloudCards.length > 0) {
+      // クラウドのカードとローカルのカードをマージして反映
+      const merged = mergeCards(cards, cloudCards);
+      handleUpdateCards(merged, false);
+      alert(`「${user.username}」としてログインしました！クラウドの暗記データ（${cloudCards.length}件）を同期しました。`);
+    } else {
+      // クラウド側にまだデータがない場合、現在のローカルカードをクラウドに同期
+      handleUpdateCards(cards, true);
+      alert(`「${user.username}」としてログインしました！現在の暗記データをクラウドへ保存しました。`);
+    }
+    setSyncState('synced');
+  };
+
+  // ログアウト時の処理
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setSyncState('idle' as any);
   };
 
   // 端末同期によるインポート
   const handleImportSyncedCards = (importedCards: Card[], merge: boolean) => {
     if (merge) {
       const merged = mergeCards(cards, importedCards);
-      handleUpdateCards(merged);
+      handleUpdateCards(merged, true);
     } else {
-      handleUpdateCards(importedCards);
+      handleUpdateCards(importedCards, true);
     }
   };
 
@@ -141,10 +240,10 @@ export const App: React.FC = () => {
   const handleSaveCard = (cardData: Partial<Card>) => {
     if (editingCard) {
       const updated = cards.map((c) => (c.id === editingCard.id ? ({ ...c, ...cardData } as Card) : c));
-      handleUpdateCards(updated);
+      handleUpdateCards(updated, true);
     } else {
       const newCard = cardData as Card;
-      handleUpdateCards([newCard, ...cards]);
+      handleUpdateCards([newCard, ...cards], true);
     }
     setEditingCard(null);
   };
@@ -152,7 +251,7 @@ export const App: React.FC = () => {
   // カード削除
   const handleDeleteCard = (cardId: string) => {
     const updated = cards.filter((c) => c.id !== cardId);
-    handleUpdateCards(updated);
+    handleUpdateCards(updated, true);
   };
 
   // 学習セッション完了ハンドラ
@@ -161,13 +260,13 @@ export const App: React.FC = () => {
     const newCards = cards.map((c) => (map.has(c.id) ? map.get(c.id)! : c));
 
     recordStudyActivity();
-    handleUpdateCards(newCards);
+    handleUpdateCards(newCards, true);
     setCurrentTab('dashboard');
   };
 
   // サンプルデータへのリセット
   const handleResetToSample = () => {
-    handleUpdateCards(INITIAL_SAMPLE_CARDS);
+    handleUpdateCards(INITIAL_SAMPLE_CARDS, true);
   };
 
   return (
@@ -185,6 +284,9 @@ export const App: React.FC = () => {
         }}
         onOpenSyncModal={() => setIsSyncModalOpen(true)}
         onLockApp={logout}
+        currentUser={currentUser}
+        syncState={syncState}
+        onOpenAccountModal={() => setIsAccountModalOpen(true)}
       />
 
       {/* メインコンテンツエリア */}
@@ -280,12 +382,24 @@ export const App: React.FC = () => {
         existingTags={existingTags}
       />
 
-      {/* 端末間データ引き継ぎモーダル */}
+      {/* 端末間データ引き継ぎモーダル (手動QR/コード共有) */}
       <DeviceSyncModal
         isOpen={isSyncModalOpen}
         onClose={() => setIsSyncModalOpen(false)}
         cards={cards}
         onImportCards={handleImportSyncedCards}
+      />
+
+      {/* クラウドユーザーアカウントモーダル */}
+      <UserAccountModal
+        isOpen={isAccountModalOpen}
+        onClose={() => setIsAccountModalOpen(false)}
+        currentUser={currentUser}
+        syncState={syncState}
+        onLoginSuccess={handleLoginSuccess}
+        onLogout={handleLogout}
+        onManualSync={handleManualSync}
+        localCards={cards}
       />
     </div>
   );
