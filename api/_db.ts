@@ -1,11 +1,19 @@
 import { neon } from '@neondatabase/serverless';
 
+// Node.js または Edge Runtime の環境変数を安全に取得
+function getEnv(key: string): string | undefined {
+  if (typeof process !== 'undefined' && process.env) {
+    return process.env[key];
+  }
+  return undefined;
+}
+
 // Vercel Postgres / Neon から自動注入される接続文字列を取得
 export function getDbUrl(): string | null {
   return (
-    process.env.POSTGRES_URL ||
-    process.env.DATABASE_URL ||
-    process.env.POSTGRES_PRISMA_URL ||
+    getEnv('POSTGRES_URL') ||
+    getEnv('DATABASE_URL') ||
+    getEnv('POSTGRES_PRISMA_URL') ||
     null
   );
 }
@@ -64,7 +72,7 @@ export async function hashPassword(password: string, salt: string): Promise<stri
 }
 
 // トークン用のシークレットキー
-const TOKEN_SECRET = process.env.AUTH_SECRET || 'remindflow_token_secret_salt_8659';
+const TOKEN_SECRET = getEnv('AUTH_SECRET') || 'remindflow_token_secret_salt_8659';
 
 // セッショントークン生成（有効期限30日）
 export async function createSessionToken(username: string): Promise<string> {
